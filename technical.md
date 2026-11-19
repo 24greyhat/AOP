@@ -41,7 +41,7 @@ This document explains the architecture first, then every file. For usage and li
                           ◀───────── response relayed byte for byte ◀─────────────────┘
                           │   UsageSniffer reads `usage` out of the stream
                           ▼
-                   economics.Ledger ─▶ dashboard.py (panel + log) ─▶ --ledger file ─▶ report.py
+                   economics.Ledger ─▶ log.py (log lines) ─▶ --ledger file ─▶ report.py
 ```
 
 Three properties define the design:
@@ -96,8 +96,8 @@ Implemented in [proxy.py](proxy.py) (`ProxyHandler.proxy_request`):
 6. **Relay.** `relay_response` streams the upstream body with `read1`, re-chunking when needed, feeding every
    piece to `UsageSniffer`.
 7. **Account.** After the stream ends, `UsageSniffer.finish()` yields the usage object (input side from
-   `message_start`, output total from the last `message_delta`). `Stats.usage` flags cache misses,
-   `Ledger.add` prices the request with and without the proxy, and the dashboard prints a money line.
+   `message_start`, output total from the last `message_delta`). `log.cache_miss` flags cache misses,
+   `Ledger.add` prices the request with and without the proxy, and `log.money_line` prints it.
 
 `main()` wires flags to `Optimizer(...)`, starts the LLMLingua model in a background thread, installs a SIGTERM
 handler that follows the Ctrl+C shutdown path, and warns if a local `llmlingua.py`/`markitdown.py` shadows the
@@ -152,7 +152,7 @@ _decide(key, frozen, events, label, produce, converted=False, cold_produce=None)
   reconsider once under key `cold1` (using `cold_produce` if given, e.g. lower abridgement thresholds); on later
   requests replay that second decision.
 
-`Event(label, before, after, fresh)` feeds the dashboard and the profile rows.
+`Event(label, before, after, fresh)` feeds the log line and the profile rows.
 
 ### 4.3 What each handler does
 
@@ -252,7 +252,7 @@ message's index under `cold-note`. Later requests re-add it at the same index, s
 
 ### 5.6 Accounting
 
-A cold request is flagged on `Result.cold`. The dashboard prefixes its log line with "❄ cold cache". Savings are priced by
+A cold request is flagged on `Result.cold`. The log line is prefixed "cold cache, history compacted". Savings are priced by
 `economics.compare` at the write price, because the usage of a cold request shows the context as cache writes.
 
 ## 6. Read-level optimization
@@ -323,7 +323,7 @@ Bumping `MEMO_VERSION` invalidates every decision (and therefore every conversat
 **[proxy.py](proxy.py)**: the HTTP server (`ThreadingHTTPServer` on `127.0.0.1`), described in section 3.
 `UsageSniffer` extracts token usage from JSON or SSE without altering the stream. `forwarded_headers` drops
 hop-by-hop headers and anything named in `Connection`. `dump_request` implements `--dump`. Module globals hold
-the optimizer, stats, ledger and dashboard. Flags are defined in `main()`.
+the optimizer, ledger and log. Flags are defined in `main()`.
 
 **[optimizer.py](optimizer.py)**: `Entry`, `Event`, `Result`, `Memo`, `Optimizer` (sections 4, 5, 7). Helpers:
 `_conv_key`, `_hash`, `_cache_breakpoints` (indices of messages carrying `cache_control`), `_pdf_tokens`.
@@ -371,10 +371,9 @@ identically-built estimates, so an unchanged request yields exactly zero differe
 per-conversation totals plus the optional JSONL file). Token sizes are estimated at 3.6 chars/token and scaled to
 the billed total, so absolute dollars are the API's and only proportions are estimated.
 
-**[dashboard.py](dashboard.py)**: terminal panel pinned to the bottom of the screen (a scroll region plus a
-six-row panel: saved tokens, last request, cache hit rate, trend sparkline, top levers, money) and the
-one-line-per-request log. `Stats` is the thread-safe counter set. Falls back to plain lines when stderr is not a
-TTY or `NO_COLOR` is set.
+**[log.py](log.py)**: plain stderr lines: `request_line` (what was rewritten, per lever), `money_line` (cost and
+estimated saving of a finished request) and `cache_miss` (a warning when a request reads back under half of the
+previous one's context).
 
 **[breakdown.py](breakdown.py)**: `composition` counts tokens per category of a request (system, tools, user
 text, assistant text, thinking, args by tool, results by tool); `record` makes one `--profile` row (before,

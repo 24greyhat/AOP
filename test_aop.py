@@ -11,7 +11,7 @@ import unittest
 import zipfile
 
 from shrink import clean, clean_prompt, count_tokens, fold_similar
-from dashboard import Dashboard, Stats
+import log
 from optimizer import Memo, Optimizer
 from targeted import targeted
 from proxy import UsageSniffer
@@ -453,19 +453,9 @@ class HelperTests(unittest.TestCase):
         self.assertEqual(sniffer.finish(), {"input_tokens": 7})
 
     def test_cache_miss_warning(self):
-        stats = Stats()
-        self.assertIsNone(stats.usage({"cache_read_input_tokens": 9000, "input_tokens": 100}, "c"))
-        self.assertIsNone(stats.usage({"cache_read_input_tokens": 9500, "input_tokens": 200}, "c"))
-        self.assertIn("cache read 0", stats.usage({"cache_creation_input_tokens": 9800, "input_tokens": 50}, "c"))
-
-    def test_panel_renders_at_fixed_width(self):
-        stats = Stats()
-        stats.usage({"cache_read_input_tokens": 800, "input_tokens": 200}, "c")
-        dash = Dashboard(stats, stream=io.StringIO())
-        dash.color = True
-        from dashboard import vlen
-        for line in dash.panel(90):
-            self.assertEqual(vlen(line), 90)
+        self.assertIsNone(log.cache_miss({"cache_read_input_tokens": 9000, "input_tokens": 100}, "c"))
+        self.assertIsNone(log.cache_miss({"cache_read_input_tokens": 9500, "input_tokens": 200}, "c"))
+        self.assertIn("cache read 0", log.cache_miss({"cache_creation_input_tokens": 9800, "input_tokens": 50}, "c"))
 
     def test_prose_detector_separates_prose_from_code(self):
         from shrink import prose_share

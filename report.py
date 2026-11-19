@@ -54,6 +54,10 @@ def cache_audit(rows, window=280, floor=2000, hit=0.8):
     for r in misses[-10:]:
         print(f"  miss {time.strftime('%H:%M:%S', time.localtime(r['ts']))} conv {r['conv']} "
               f"read {r['read']:,d} of previous {r['prev_ctx']:,d}{' (rewritten)' if r.get('rewritten') else ''}")
+    fb = [r for r in rows if r.get("fell_back")]
+    cold = [r for r in rows if r.get("cold") and r.get("rewritten")]
+    print(f"API rejected a rewritten request (fell back to the original): {len(fb)} of {len(rows)} requests; "
+          f"cold-compacted requests: {len(cold)}")
     if not any(g[0] for g in groups.values()):
         print("no eligible requests (ledger lacks prev_ctx/gap, or no follow-ups within the window)")
 

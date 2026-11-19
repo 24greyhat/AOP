@@ -1,7 +1,6 @@
 """Shrink Claude Code's API requests (cache-safely) and forward them to Anthropic."""
 
 import argparse
-import atexit
 import base64
 from datetime import datetime, timezone
 import http.client
@@ -17,7 +16,7 @@ from urllib.parse import urlsplit
 import breakdown
 import economics
 from shrink import Compressor
-from dashboard import Dashboard, Stats
+import log
 from optimizer import Memo, Optimizer
 
 
@@ -33,10 +32,7 @@ DUMP_PATH = None   # --dump: write the original (untouched) request bodies here
 DRY_RUN = False    # --dry-run: measure savings but forward the original bodies
 PROFILE_PATH = None  # --profile: one JSON line per request with token composition and savings per lever
 OPTIMIZER = None
-STATS = Stats()
 LEDGER = economics.Ledger()
-DASH = Dashboard(STATS)
-DASH.ledger = LEDGER
 _MODEL = re.compile(rb'"model"\s*:\s*"([^"]+)"')
 
 
@@ -211,14 +207,12 @@ class ProxyHandler(BaseHTTPRequestHandler):
             if OPTIMIZER and "Content-Encoding" not in self.headers:
                 result = OPTIMIZER.optimize(body)
                 conv = result.conv
-                STATS.request(result)
-                DASH.log(DASH.request_line(result))
+                log.say(log.request_line(result))
                 if PROFILE_PATH:
                     Thread(target=lambda: breakdown.append_jsonl(PROFILE_PATH, breakdown.record(original, result, conv)),
                            daemon=True).start()
                 if not DRY_RUN:
                     body = result.body
-                DASH.refresh()
         rewritten = body is not original and body != original
 
         try:
@@ -228,12 +222,12 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 detail = response.read(1500).decode("utf-8", "replace")
                 response.close()
                 upstream.close()
-                DASH.log(DASH.amber(f"⚠ API rejected the rewritten request, resending the original: {detail[:160]}"))
+                log.say(f"⚠ API rejected the rewritten request, resending the original: {detail[:160]}")
                 OPTIMIZER.poison(conv)  # this conversation goes through untouched from here on
                 fell_back = True
                 upstream, response = self.send_upstream(original, sniff)
         except (http.client.HTTPException, OSError, ValueError) as error:
-            DASH.log(DASH.red(f"upstream request failed ({type(error).__name__})"))
+            log.say(f"upstream request failed ({type(error).__name__})")
             try:
                 self.send_error(502, "Anthropic API connection failed")
             except OSError:
@@ -251,15 +245,14 @@ class ProxyHandler(BaseHTTPRequestHandler):
             upstream.close()
             if sniffer:
                 usage = sniffer.finish()
-                warning = STATS.usage(usage, conv)
+                warning = log.cache_miss(usage, conv)
                 if warning:
-                    DASH.log(DASH.amber(f"⚠ cache miss: {warning}"))
+                    log.say(f"⚠ cache miss: {warning}")
                 m = _MODEL.search(original[:4096])
                 model = (result.model if result else "") or (m.group(1).decode("utf-8", "replace") if m else "")
-                row = LEDGER.add(conv, model, usage, None if fell_back else result, DRY_RUN)
+                row = LEDGER.add(conv, model, usage, None if fell_back else result, DRY_RUN, fell_back=fell_back)
                 if row:
-                    DASH.log(DASH.money_line(row))
-                DASH.refresh()
+                    log.say(log.money_line(row))
 
     def relay_response(self, response, sniffer=None):
         has_body = self.command != "HEAD" and response.status not in (204, 304)
@@ -349,8 +342,7 @@ def main():
     UPSTREAM = (target.scheme, target.hostname, target.port or (443 if target.scheme == "https" else 80))
     DUMP_PATH, DRY_RUN, PROFILE_PATH = args.dump, args.dry_run, args.profile
     LEDGER.path = args.ledger
-    DASH.dry_run = args.dry_run
-
+    
     compressor = None
     if not (args.no_optimize or args.no_compress):
         compressor = Compressor(model=args.model, rate=args.rate, device=args.device)
@@ -374,26 +366,22 @@ def main():
     signal.signal(signal.SIGTERM, terminate)
 
     with ThreadingHTTPServer(("127.0.0.1", args.port), ProxyHandler) as server:
-        DASH.start()
-        atexit.register(DASH.stop)
         mode = "pass-through" if args.no_optimize else "dry-run" if DRY_RUN else "optimizing"
-        DASH.log(f"{DASH.bold('http://127.0.0.1:' + str(server.server_port))} → {args.upstream}  "
-                 f"{DASH.dim('[' + mode + ']')}")
+        log.say(f"{'http://127.0.0.1:' + str(server.server_port)} → {args.upstream}  "
+                 f"{('[' + mode + ']')}")
         here = os.path.dirname(os.path.abspath(__file__))
         for package in ("llmlingua", "markitdown"):
             spec = importlib.util.find_spec(package)
             if spec and spec.origin and os.path.dirname(os.path.abspath(spec.origin)) == here:
-                DASH.log(DASH.red(f"⚠ {package}.py in this folder shadows the real '{package}' package "
+                log.say((f"⚠ {package}.py in this folder shadows the real '{package}' package "
                                   f"— rename or delete it or that feature will not work"))
         if compressor:
-            DASH.log(DASH.dim(f"LLMLingua-2 model loading in background: {compressor.model_id}"))
-        DASH.log(DASH.dim("Prompts are inspected and rewritten locally; only the result is sent to the API."))
+            log.say(f"LLMLingua-2 model loading in background: {compressor.model_id}")
+        log.say("Prompts are inspected and rewritten locally; only the result is sent to the API.")
         try:
             server.serve_forever()
         except KeyboardInterrupt:
             pass
-        finally:
-            DASH.stop()
 
 
 if __name__ == "__main__":

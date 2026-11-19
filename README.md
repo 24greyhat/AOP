@@ -44,7 +44,7 @@ python3 report.py ledger.jsonl
 python3 report.py ledger.jsonl --requests ab12   # one conversation, per request
 ```
 
-Judge it by dollars, not the token count in the panel. Tokens cut from cached history save the cheap read price. Tokens cut from the new tail save the expensive write price.
+Judge it by dollars, not the token counts in the log. Tokens cut from cached history save the cheap read price. Tokens cut from the new tail save the expensive write price.
 
 ## How it stays cache-safe
 
@@ -105,6 +105,17 @@ When a conversation comes back after its TTL, the proxy compacts old history onc
 
 More flags: `python3 proxy.py --help`.
 
+## Reading the code
+
+About 3,000 lines of source. Read in this order and stop whenever you have enough:
+
+1. `proxy.py` (about 400 lines): the HTTP server. Reads a request, asks the optimizer to rewrite it, forwards it, sniffs the token usage out of the reply, and resends the original if the API returns a 400.
+2. `optimizer.py`, top docstring and `_run`: the whole rewrite pipeline. Everything is decided once per block and stored in SQLite (`_decide`), so later requests resend identical bytes and the prompt cache stays valid.
+3. The levers it calls, each small and independent: `prefix.py` (system prompt and tools), `elide.py` (long tool-call arguments), `shrink.py` (tool output and prompts), `targeted.py` (large file reads), `readopt.py` (repeated and stale reads), `cold.py` (history compaction after the cache has expired).
+4. `economics.py`, `log.py`, `report.py`: pricing, log lines, and the ledger report. Nothing here changes requests.
+
+The idea to hold onto: **a block is rewritten the first time it is seen, never again.** The one exception is a cold restart, when the cache is gone anyway.
+
 ## Files
 
 | File | Role |
@@ -120,7 +131,7 @@ More flags: `python3 proxy.py --help`.
 | `fileconv.py` | markitdown wrapper |
 | `economics.py` | Prices and cache-aware cost |
 | `report.py` | Money report from a ledger |
-| `dashboard.py` | Terminal log and panel |
+| `log.py` | One-line request and cost log |
 | `breakdown.py` | Token composition per request (`--profile`) |
 | `test_aop.py`, `test_cold.py` | `python3 -m unittest test_aop test_cold` |
 

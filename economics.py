@@ -197,7 +197,7 @@ class Ledger:
         self.all = Totals()
         self._prev = {}     # conv -> (ts, cacheable tokens of its previous request)
 
-    def add(self, conv, model, usage, result, dry_run=False):
+    def add(self, conv, model, usage, result, dry_run=False, fell_back=False):
         """Record one finished request. Returns the row, or None when it cannot be priced."""
         price = price_for(model)
         if not usage or price is None:
@@ -229,6 +229,8 @@ class Ledger:
         with self.lock:
             prev = self._prev.get(row["conv"])
             self._prev[row["conv"]] = (row["ts"], ctx)
+        row["fell_back"] = fell_back          # API rejected the rewritten request; original resent
+        row["cold"] = bool(getattr(result, "cold", False))
         row["rewritten"] = orig_p is not None and not dry_run
         row["prev_ctx"] = prev[1] if prev else 0
         row["gap"] = round(row["ts"] - prev[0], 1) if prev else None
